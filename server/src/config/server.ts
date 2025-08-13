@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 export const config = {
+   UPLOAD_DIR: process.env.UPLOAD_DIR || 'public/uploads',
   // Server
   NODE_ENV: process.env.NODE_ENV || 'development',
   PORT: parseInt(process.env.PORT || '5000', 10),

@@ -1,30 +1,34 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { PrismaClient, Role } from '@prisma/client';
-import { RegisterDto, LoginDto, AuthResponse } from '../dto/auth.dto';
+import crypto from 'crypto';
+import { Role } from '@prisma/client';
+import { RegisterDto, LoginDto, AuthResponse, RefreshTokenResponse } from '../dto/auth.dto';
 import { AppError } from '../../../utils/AppError';
 import { config } from '../../../config/server';
+import prisma from '../../../config/prisma';
+import redisClient from '../../../config/redis';
 
-const prisma = new PrismaClient();
 
 export class AuthService {
-  private generateTokens(userId: string, role: Role) {
-    const payload = { userId, role: role.toString() };
-    
-    const accessToken = jwt.sign(
-      payload,
-      config.JWT_SECRET,
-      { expiresIn: config.JWT_EXPIRES_IN }
-    );
+private generateTokens(userId: string, role: Role) {
+  const payload = { userId, role };
 
-    const refreshToken = jwt.sign(
-      payload,
-      config.JWT_REFRESH_SECRET,
-      { expiresIn: config.JWT_REFRESH_EXPIRES_IN }
-    );
+ const accessToken = jwt.sign(
+  { userId, role },
+  config.JWT_SECRET,
+  { expiresIn: config.JWT_EXPIRES_IN }
+);
 
-    return { accessToken, refreshToken };
-  }
+const refreshToken = jwt.sign(
+  { userId, role },
+  config.JWT_REFRESH_SECRET,
+  { expiresIn: config.JWT_REFRESH_EXPIRES_IN }
+);
+
+
+  return { accessToken, refreshToken };
+}
+
 
   async register(userData: RegisterDto): Promise<AuthResponse> {
     const { name, email, password } = userData;
@@ -42,8 +46,8 @@ export class AuthService {
     const hashedPassword = await bcrypt.hash(password, 12);
 
     // Split name into firstName and lastName
-    const nameParts = name.trim().split(' ');
-    const firstName = nameParts[0];
+    const nameParts = name.trim().split(/\s+/);
+    const firstName = nameParts[0] || '';
     const lastName = nameParts.slice(1).join(' ') || '';
 
     // Create user
@@ -53,7 +57,7 @@ export class AuthService {
         password: hashedPassword,
         firstName,
         lastName,
-        role: Role.USER, // Default role
+        role: Role.USER,
       },
       select: {
         id: true,
@@ -102,7 +106,7 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new AppError('Invalid email or password', 400);
+      throw new AppError('Invalid credentials', 400);
     }
 
     if (!user.isActive) {
@@ -112,7 +116,7 @@ export class AuthService {
     // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      throw new AppError('Invalid email or password', 400);
+      throw new AppError('Invalid credentials', 400);
     }
 
     // Generate tokens
@@ -133,18 +137,76 @@ export class AuthService {
   }
 
   async logout(token: string): Promise<void> {
-    // In a production app, you might want to blacklist the token
-    // For now, we'll just acknowledge the logout
-    // You could store blacklisted tokens in Redis or database
-    console.log(`User logged out with token: ${token.substring(0, 20)}...`);
+    try {
+      if (token) {
+        // Hash token for blacklist
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+        const decoded = jwt.decode(token) as { exp: number } | null;
+        
+        if (decoded?.exp) {
+          const expiresIn = decoded.exp - Math.floor(Date.now() / 1000);
+          if (expiresIn > 0) {
+            // Fixed Redis set call with proper arguments
+            await redisClient.set(`blacklist:${hashedToken}`, 'true', 'EX', expiresIn);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  }
+
+  async refresh(refreshToken: string): Promise<RefreshTokenResponse> {
+    if (!refreshToken) {
+      throw new AppError('Refresh token is required', 400);
+    }
+
+    try {
+      // Check if token is blacklisted
+      const hashedToken = crypto.createHash('sha256').update(refreshToken).digest('hex');
+      const isBlacklisted = await redisClient.get(`blacklist:${hashedToken}`);
+      if (isBlacklisted) {
+        throw new AppError('Refresh token invalidated', 401);
+      }
+
+      // Verify refresh token
+      const decoded = jwt.verify(refreshToken, config.JWT_REFRESH_SECRET!) as { 
+        userId: string; 
+        role: Role 
+      };
+
+      // Generate new access token
+      const accessToken = jwt.sign(
+        { userId: decoded.userId, role: decoded.role },
+        config.JWT_SECRET!,
+        { expiresIn: config.JWT_EXPIRES_IN }
+      );
+
+      return { accessToken };
+    } catch (error) {
+      throw new AppError('Invalid refresh token', 401);
+    }
   }
 
   async verifyToken(token: string): Promise<{ userId: string; role: Role }> {
     try {
-      const decoded = jwt.verify(token, config.JWT_SECRET) as { userId: string; role: Role };
+      // Check token blacklist
+      const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+      const isBlacklisted = await redisClient.get(`blacklist:${hashedToken}`);
+      if (isBlacklisted) {
+        throw new AppError('Token invalidated', 401);
+      }
+
+      const decoded = jwt.verify(token, config.JWT_SECRET!) as { userId: string; role: Role };
+      
+      // Validate role exists
+      if (!Object.values(Role).includes(decoded.role)) {
+        throw new AppError('Invalid token payload', 401);
+      }
+      
       return decoded;
     } catch (error) {
       throw new AppError('Invalid or expired token', 401);
     }
   }
-} 
+}

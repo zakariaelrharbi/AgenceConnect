@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { AuthController } from '../controller/auth.controller';
 import { validateRequest } from '../../../middleware/validation.middleware';
-import { loginSchema, registerSchema } from '../dto/auth.dto';
+import { authenticateToken } from '../../../middleware/auth.middleware';
+import { loginSchema, registerSchema, refreshTokenSchema } from '../dto/auth.dto'; // Added refreshTokenSchema
 
 const router = Router();
 const authController = new AuthController();
@@ -113,6 +114,48 @@ router.post('/login', validateRequest(loginSchema), authController.login);
 
 /**
  * @swagger
+ * /auth/refresh:
+ *   post:
+ *     summary: Refresh access token
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - refreshToken
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *                 description: Refresh token
+ *     responses:
+ *       200:
+ *         description: Token refreshed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     accessToken:
+ *                       type: string
+ *       400:
+ *         description: Refresh token is required
+ *       401:
+ *         description: Invalid refresh token
+ */
+router.post('/refresh', validateRequest(refreshTokenSchema), authController.refresh); // Added endpoint
+
+/**
+ * @swagger
  * /auth/logout:
  *   post:
  *     summary: Logout user
@@ -125,6 +168,7 @@ router.post('/login', validateRequest(loginSchema), authController.login);
  *       401:
  *         description: Unauthorized
  */
-router.post('/logout', authController.logout);
+router.post('/logout', authenticateToken, authController.logout);
 
-export default router; 
+
+export default router;

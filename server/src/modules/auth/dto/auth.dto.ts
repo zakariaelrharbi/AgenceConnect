@@ -21,6 +21,15 @@ export const loginSchema = z.object({
 
 export type LoginDto = z.infer<typeof loginSchema>['body'];
 
+// Added Refresh Token DTO
+export const refreshTokenSchema = z.object({
+  body: z.object({
+    refreshToken: z.string().min(1, 'Refresh token is required'),
+  }),
+});
+
+export type RefreshTokenDto = z.infer<typeof refreshTokenSchema>['body'];
+
 // Auth Response DTOs
 export interface AuthResponse {
   user: {
@@ -35,6 +44,11 @@ export interface AuthResponse {
   refreshToken?: string;
 }
 
+// Added Refresh Token Response
+export interface RefreshTokenResponse {
+  accessToken: string;
+}
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -43,4 +57,4 @@ export interface UserProfile {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
-} 
+}
